@@ -68,6 +68,15 @@ final class TelecomAdapter implements InCallServiceListener {
         }
     }
 
+    void answerCall(String callId, int videoState, int callWaitingResponseType) {
+        android.telecom.Call call = getTelecommCallById(callId);
+        if (call != null) {
+            call.answer(videoState, callWaitingResponseType);
+        } else {
+            Log.e(this, "error answerCall, call not in call list: " + callId);
+        }
+    }
+
     void rejectCall(String callId, boolean rejectWithMessage, String message) {
         android.telecom.Call call = getTelecommCallById(callId);
         if (call != null) {
@@ -92,6 +101,15 @@ final class TelecomAdapter implements InCallServiceListener {
             call.hold();
         } else {
             Log.e(this, "error holdCall, call not in call list " + callId);
+        }
+    }
+
+    void transferCall(String callId) {
+        android.telecom.Call call = getTelecommCallById(callId);
+        if (call != null) {
+            call.transferCall();
+        } else {
+            Log.e(this, "error transferCall, call not in call list " + callId);
         }
     }
 

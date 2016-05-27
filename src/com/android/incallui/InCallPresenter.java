@@ -18,12 +18,12 @@ package com.android.incallui;
 
 import android.app.ActivityManager.TaskDescription;
 import android.app.FragmentManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ActivityNotFoundException;
 import android.content.res.Resources;
 import android.graphics.Point;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.telecom.DisconnectCause;
@@ -31,20 +31,24 @@ import android.telecom.PhoneAccount;
 import android.telecom.PhoneAccountHandle;
 import android.telecom.TelecomManager;
 import android.telecom.VideoProfile;
-import android.telephony.PhoneNumberUtils;
 import android.text.TextUtils;
-import android.view.Surface;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
+import com.android.contacts.common.activity.BlockContactActivity;
 import com.android.contacts.common.interactions.TouchPointManager;
 import com.android.contacts.common.testing.NeededForTesting;
 import com.android.contacts.common.util.MaterialColorMapUtils.MaterialPalette;
+import com.android.dialer.callerinfo.CallerInfoProviderPicker;
 import com.android.incalluibind.ObjectFactory;
+import com.android.phone.common.incall.CallMethodInfo;
+import com.android.phone.common.incall.DialerDataSubscription;
+
 import com.google.common.base.Preconditions;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -61,8 +65,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * TODO: This class has become more of a state machine at this point.  Consider renaming.
  */
 public class InCallPresenter implements CallList.Listener,
-        CircularRevealFragment.OnCircularRevealCompleteListener {
+        CircularRevealFragment.OnCircularRevealCompleteListener,
+        ContactInfoCache.ContactInfoCacheCallback,
+        DialerDataSubscription.PluginChanged<CallMethodInfo> {
 
+    private static final boolean DEBUG = false;
+    private static final String AMBIENT_SUBSCRIPTION_ID = InCallPresenter.class.getSimpleName();
     private static final String EXTRA_FIRST_TIME_SHOWN =
             "com.android.incallui.intent.extra.FIRST_TIME_SHOWN";
 
@@ -88,6 +96,9 @@ public class InCallPresenter implements CallList.Listener,
             new ConcurrentHashMap<InCallOrientationListener, Boolean>(8, 0.9f, 1));
     private final Set<InCallEventListener> mInCallEventListeners = Collections.newSetFromMap(
             new ConcurrentHashMap<InCallEventListener, Boolean>(8, 0.9f, 1));
+    private final Set<InCallPluginUpdateListener> mInCallPluginUpdateListeners =
+            Collections.newSetFromMap(
+                    new ConcurrentHashMap<InCallPluginUpdateListener, Boolean>(8, 0.9f, 1));
 
     private AudioModeProvider mAudioModeProvider;
     private StatusBarNotifier mStatusBarNotifier;
@@ -242,6 +253,8 @@ public class InCallPresenter implements CallList.Listener,
 
         // This only gets called by the service so this is okay.
         mServiceConnected = true;
+
+        DialerDataSubscription.get(mContext).subscribe(AMBIENT_SUBSCRIPTION_ID, this);
 
         // The final thing we do in this set up is add ourselves as a listener to CallList.  This
         // will kick off an update and the whole process can start.
@@ -532,6 +545,30 @@ public class InCallPresenter implements CallList.Listener,
         wakeUpScreen();
     }
 
+    @Override
+    public void onChanged(HashMap<ComponentName, CallMethodInfo> pluginInfos) {
+        if (DEBUG) Log.i(this, "InCall plugins updated");
+        // Update ContactInfoCache then notify listeners
+        final CallList calls = CallList.getInstance();
+        final Call call = calls.getFirstCall();
+        if (call != null && mContactInfoCache != null) {
+            mContactInfoCache.refreshPluginInfo(call, this);
+        }
+    }
+
+    @Override
+    public void onContactInfoComplete(String callId, ContactInfoCache.ContactCacheEntry entry) {
+        if (DEBUG) Log.i(this, "onContactInfoComplete");
+        for (InCallPluginUpdateListener listener : mInCallPluginUpdateListeners) {
+            listener.onInCallPluginUpdated();
+        }
+    }
+
+    @Override
+    public void onImageLoadComplete(String callId, ContactInfoCache.ContactCacheEntry entry) {
+        // Stub
+    }
+
     /**
      * Given the call list, return the state in which the in-call screen should be.
      */
@@ -664,6 +701,17 @@ public class InCallPresenter implements CallList.Listener,
         }
     }
 
+    public void addInCallPluginUpdateListener(InCallPluginUpdateListener listener) {
+        Preconditions.checkNotNull(listener);
+        mInCallPluginUpdateListeners.add(listener);
+    }
+
+    public void removeInCallPluginUpdateListener(InCallPluginUpdateListener listener) {
+        if (listener != null) {
+            mInCallPluginUpdateListeners.remove(listener);
+        }
+    }
+
     public ProximitySensor getProximitySensor() {
         return mProximitySensor;
     }
@@ -732,6 +780,28 @@ public class InCallPresenter implements CallList.Listener,
             TelecomAdapter.getInstance().answerCall(call.getId(), videoState);
             showInCall(false, false/* newOutgoingCall */);
         }
+    }
+
+    public void blockIncomingCall(Context context) {
+        // By the time we receive this intent, we could be shut down and call list
+        // could be null.  Bail in those cases.
+        if (mCallList == null) {
+            StatusBarNotifier.clearAllCallNotifications(context);
+            return;
+        }
+
+        Call call = mCallList.getIncomingCall();
+        if (call == null) {
+            return;
+        }
+
+        String number = call.getNumber();
+        declineIncomingCall(context);
+
+        Intent i = new Intent(mContext, BlockContactActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        i.putExtra(BlockContactActivity.EXTRA_PHONE_NUMBER, number);
+        mContext.startActivity(i);
     }
 
     /**
@@ -1348,15 +1418,19 @@ public class InCallPresenter implements CallList.Listener,
         Log.i(this, "attemptCleanup? " + shouldCleanup);
 
         if (shouldCleanup) {
-            mIsActivityPreviouslyStarted = false;
-            mIsChangingConfigurations = false;
-
-            // blow away stale contact info so that we get fresh data on
-            // the next set of calls
             if (mContactInfoCache != null) {
+                // If the user is ending a call from an unknown contact,
+                // prompt the user to enable caller info provider.
+                if (mIsActivityPreviouslyStarted && mContactInfoCache.hasUnknownCalls()) {
+                    CallerInfoProviderPicker.onUnknownCallEnded(mContext);
+                }
+
+                // Blow away stale contact info so that we get fresh data on the next set of calls.
                 mContactInfoCache.clearCache();
             }
             mContactInfoCache = null;
+            mIsActivityPreviouslyStarted = false;
+            mIsChangingConfigurations = false;
 
             if (mProximitySensor != null) {
                 removeListener(mProximitySensor);
@@ -1385,6 +1459,8 @@ public class InCallPresenter implements CallList.Listener,
             }
             mCallList = null;
 
+            DialerDataSubscription.get(mContext).unsubscribe(AMBIENT_SUBSCRIPTION_ID);
+
             mContext = null;
             mInCallActivity = null;
 
@@ -1394,6 +1470,8 @@ public class InCallPresenter implements CallList.Listener,
             mCanAddCallListeners.clear();
             mOrientationListeners.clear();
             mInCallEventListeners.clear();
+            mInCallPluginUpdateListeners.clear();
+
 
             Log.d(this, "Finished InCallPresenter.CleanUp");
         }
@@ -1771,6 +1849,10 @@ public class InCallPresenter implements CallList.Listener,
 
     public interface InCallOrientationListener {
         public void onDeviceOrientationChanged(int orientation);
+    }
+
+    public interface InCallPluginUpdateListener {
+        public void onInCallPluginUpdated();
     }
 
     /**

@@ -20,6 +20,7 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Message;
 import android.telecom.VideoProfile;
+import android.telecom.TelecomManager;
 import android.util.AttributeSet;
 import android.view.View;
 
@@ -124,6 +125,10 @@ public class GlowPadWrapper extends GlowPadView implements GlowPadView.OnTrigger
                 mAnswerListener.onText();
                 mTargetTriggered = true;
                 break;
+            case R.drawable.ic_lockscreen_block:
+                mAnswerListener.onBlock(getContext());
+                mTargetTriggered = true;
+                break;
             case R.drawable.ic_videocam:
             case R.drawable.ic_lockscreen_answer_video:
                 mAnswerListener.onAnswer(mVideoState, getContext());
@@ -143,6 +148,16 @@ public class GlowPadWrapper extends GlowPadView implements GlowPadView.OnTrigger
                 break;
             case R.drawable.qti_ic_lockscreen_deflect:
                 mAnswerListener.onDeflect(getContext());
+                mTargetTriggered = true;
+                break;
+            case R.drawable.ic_lockscreen_answer_hold_current:
+                mAnswerListener.onAnswer(VideoProfile.STATE_AUDIO_ONLY, getContext(),
+                        TelecomManager.CALL_WAITING_RESPONSE_NO_POPUP_HOLD_CALL);
+                mTargetTriggered = true;
+                break;
+            case R.drawable.ic_lockscreen_answer_end_current:
+                mAnswerListener.onAnswer(VideoProfile.STATE_AUDIO_ONLY, getContext(),
+                        TelecomManager.CALL_WAITING_RESPONSE_NO_POPUP_END_CALL);
                 mTargetTriggered = true;
                 break;
             default:
@@ -176,9 +191,11 @@ public class GlowPadWrapper extends GlowPadView implements GlowPadView.OnTrigger
 
     public interface AnswerListener {
         void onAnswer(int videoState, Context context);
+        void onAnswer(int videoState, Context context, int callWaitingResponseType);
         void onDecline(Context context);
         void onDeclineUpgradeRequest(Context context);
         void onText();
         void onDeflect(Context context);
+        void onBlock(Context context);
     }
 }

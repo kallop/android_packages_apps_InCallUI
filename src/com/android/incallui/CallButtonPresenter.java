@@ -39,6 +39,7 @@ import com.android.incallui.InCallPresenter.IncomingCallListener;
 import com.android.incallui.InCallPresenter.InCallDetailsListener;
 
 import java.util.Objects;
+import org.codeaurora.QtiVideoCallConstants;
 
 /**
  * Logic for call buttons.
@@ -229,6 +230,15 @@ public class CallButtonPresenter extends Presenter<CallButtonPresenter.CallButto
             Log.i(this, "Removing the call from hold: " + mCall);
             TelecomAdapter.getInstance().unholdCall(mCall.getId());
         }
+    }
+
+    public void transferCallClicked() {
+        if (mCall == null) {
+            return;
+        }
+
+        Log.i(this, "transferring call : " + mCall);
+        TelecomAdapter.getInstance().transferCall(mCall.getId());
     }
 
     public void swapClicked() {
@@ -458,11 +468,13 @@ public class CallButtonPresenter extends Presenter<CallButtonPresenter.CallButto
 
         final boolean showMute = call.can(android.telecom.Call.Details.CAPABILITY_MUTE);
         final boolean showAddParticipant = call.can(
-                android.telecom.Call.Details.CAPABILITY_ADD_PARTICIPANT);
+                QtiVideoCallConstants.CAPABILITY_ADD_PARTICIPANT);
 
         final CallRecorder recorder = CallRecorder.getInstance();
         boolean showCallRecordOption = recorder.isEnabled()
                 && !isVideo && call.getState() == Call.State.ACTIVE;
+        final boolean showTransferCall = call.can(
+                android.telecom.Call.Details.CAPABILITY_SUPPORTS_TRANSFER);
 
         ui.showButton(BUTTON_AUDIO, true);
         ui.showButton(BUTTON_SWAP, showSwap);
@@ -476,6 +488,7 @@ public class CallButtonPresenter extends Presenter<CallButtonPresenter.CallButto
         ui.showButton(BUTTON_DIALPAD, !isVideo || useExt);
         ui.showButton(BUTTON_MERGE, showMerge);
         ui.showButton(BUTTON_RECORD_CALL, showCallRecordOption);
+        ui.showButton(BUTTON_TRANSFER_CALL, showTransferCall);
         ui.enableAddParticipant(showAddParticipant);
 
         ui.updateButtonStates();

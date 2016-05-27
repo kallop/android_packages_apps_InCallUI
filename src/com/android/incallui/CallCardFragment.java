@@ -21,6 +21,7 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.drawable.AnimationDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -41,7 +42,6 @@ import android.view.ViewPropertyAnimator;
 import android.view.ViewTreeObserver;
 import android.view.ViewTreeObserver.OnGlobalLayoutListener;
 import android.view.accessibility.AccessibilityEvent;
-import android.view.accessibility.AccessibilityManager;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.widget.ImageButton;
@@ -52,6 +52,7 @@ import android.widget.Toast;
 import com.android.contacts.common.util.MaterialColorMapUtils.MaterialPalette;
 import com.android.contacts.common.widget.FloatingActionButtonController;
 import com.android.phone.common.animation.AnimUtils;
+import com.cyanogen.lookup.phonenumber.response.StatusCode;
 
 import java.util.List;
 
@@ -124,12 +125,14 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
     private TextView mElapsedTime;
     private Drawable mPrimaryPhotoDrawable;
     private TextView mCallSubject;
+    private ImageView mVolteCallLabel;
 
     // Container view that houses the entire primary call card, including the call buttons
     private View mPrimaryCallCardContainer;
     // Container view that houses the primary call information
     private ViewGroup mPrimaryCallInfo;
     private View mCallButtonsContainer;
+    private View mModButtonsContainer;
     private TextView mRecordingTimeLabel;
     private TextView mRecordingIcon;
 
@@ -143,6 +146,13 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
     private View mProgressSpinner;
 
     private View mManageConferenceCallButton;
+
+    private View mPhotoContainer;
+    private View mLookupExtraInfoContainer;
+    private TextView mLookupStatusMessage;
+    private TextView mContactInfoAttributionText;
+    private ImageView mContactInfoAttributionLogo;
+    private TextView mSpamInfoView;
 
     // Dark number info bar
     private TextView mInCallMessageLabel;
@@ -247,7 +257,6 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
         Trace.endSection();
         return view;
     }
-
     @Override
     public void onViewCreated(View view, Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
@@ -278,6 +287,7 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
         mPrimaryCallCardContainer = view.findViewById(R.id.primary_call_info_container);
         mPrimaryCallInfo = (ViewGroup) view.findViewById(R.id.primary_call_banner);
         mCallButtonsContainer = view.findViewById(R.id.callButtonFragment);
+        mModButtonsContainer = view.findViewById(R.id.modButtonFragment);
         mInCallMessageLabel = (TextView) view.findViewById(R.id.connectionServiceMessage);
         mProgressSpinner = view.findViewById(R.id.progressSpinner);
 
@@ -323,6 +333,15 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
         mPrimaryName.setElegantTextHeight(false);
         mCallStateLabel.setElegantTextHeight(false);
         mCallSubject = (TextView) view.findViewById(R.id.callSubject);
+
+        mLookupExtraInfoContainer = view.findViewById(R.id.lookup_extra_info_container);
+        mLookupStatusMessage = (TextView) view.findViewById(R.id.lookupStatusMessage);
+        mContactInfoAttributionText = (TextView) view.findViewById(R.id.contactInfoAttributionText);
+        mContactInfoAttributionLogo = (ImageView) view.findViewById(R.id.contactInfoAttributionLogo);
+        mSpamInfoView = (TextView) view.findViewById(R.id.spamInfo);
+        mPhotoContainer = view.findViewById(R.id.call_card_content);
+
+        mVolteCallLabel = (ImageView) view.findViewById(R.id.volte_label);
 
         mRecordingTimeLabel = (TextView) view.findViewById(R.id.recordingTime);
         mRecordingIcon = (TextView) view.findViewById(R.id.recordingIcon);
@@ -395,6 +414,15 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
                 return true;
             }
         });
+    }
+
+    @Override
+    public void setVolteCallLabel(boolean show) {
+        if (show) {
+            mVolteCallLabel.setVisibility(View.VISIBLE);
+        } else {
+            mVolteCallLabel.setVisibility(View.GONE);
+        }
     }
 
     private void doActionOnPredraw(final boolean visible, final boolean isLayoutRtl,
@@ -555,7 +583,9 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
      */
     @Override
     public void setPrimary(String number, String name, boolean nameIsNumber, String label,
-            Drawable photo, boolean isSipCall, boolean isForwarded, boolean isContactPhotoShown) {
+            Drawable photo, boolean isSipCall, boolean isForwarded, boolean isContactPhotoShown,
+            String providerName, Drawable providerLogo, boolean isLookupInProgress,
+            StatusCode lookupStatus, boolean showSpamInfo, int spamCount) {
         Log.d(this, "Setting primary call");
         // set the name field.
         setPrimaryName(name, nameIsNumber);
@@ -576,6 +606,9 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
         showCallTypeLabel(isSipCall, isForwarded);
 
         setDrawableToImageView(mPhoto, photo, isContactPhotoShown);
+
+        setLookupProviderStatus(isLookupInProgress, lookupStatus, providerName, providerLogo,
+                showSpamInfo, spamCount);
     }
 
     @Override
@@ -633,7 +666,11 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
             mSecondaryCallInfo.setVisibility(View.VISIBLE);
         }
 
-        updateFabPositionForSecondaryCallInfo();
+        // If secondary info visibility hasn't changed, don't animate. Return.
+        if (wasVisible == isVisible) {
+            return;
+        }
+
         // We need to translate the secondary caller info, but we need to know its position after
         // the layout has occurred so use a {@code ViewTreeObserver}.
         final ViewTreeObserver observer = getView().getViewTreeObserver();
@@ -647,6 +684,10 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
                 // Get the height of the secondary call info now, and then re-hide the view prior
                 // to doing the actual animation.
                 int secondaryHeight = mSecondaryCallInfo.getHeight();
+
+                // Update floating end call button position onPreDraw
+                updateFabPositionForSecondaryCallInfo();
+
                 if (isVisible) {
                     mSecondaryCallInfo.setVisibility(View.GONE);
                 }
@@ -924,7 +965,7 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
             // that switch drawables in the middle of the cross-fade animations. Just set the
             // photo directly instead.
             view.setImageDrawable(photo);
-            view.setVisibility(isVisible ? View.VISIBLE : View.GONE);
+        view.setVisibility(isVisible ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -1193,6 +1234,7 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
             mPrimaryCallCardContainer.setBackgroundColor(themeColors.mPrimaryColor);
         }
         mCallButtonsContainer.setBackgroundColor(themeColors.mPrimaryColor);
+        mModButtonsContainer.setBackgroundColor(themeColors.mSecondaryColor);
         mCallSubject.setTextColor(themeColors.mPrimaryColor);
 
         mCurrentThemeColors = themeColors;
@@ -1240,6 +1282,7 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
                 mFloatingActionButtonController.setScreenWidth(parent.getWidth());
 
                 mCallButtonsContainer.setAlpha(0);
+                mModButtonsContainer.setAlpha(0);
                 mCallStateLabel.setAlpha(0);
                 mPrimaryName.setAlpha(0);
                 mCallTypeLabel.setAlpha(0);
@@ -1251,6 +1294,7 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
                 assignTranslateAnimation(mCallNumberAndLabel, 3);
                 assignTranslateAnimation(mCallTypeLabel, 4);
                 assignTranslateAnimation(mCallButtonsContainer, 5);
+                assignTranslateAnimation(mModButtonsContainer, 6);
 
                 final Animator animator = getShrinkAnimator(parent.getHeight(), originalHeight);
 
@@ -1274,17 +1318,87 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
         Toast.makeText(getContext(), R.string.note_sent, Toast.LENGTH_LONG).show();
     }
 
+    public void setLookupProviderStatus(boolean isLookupInProgress, StatusCode lookupStatus,
+            String providerName, Drawable providerLogo, boolean showSpamInfo, int spamCount) {
+        Resources res = getResources();
+        mSpamInfoView.setVisibility(showSpamInfo ? View.VISIBLE : View.GONE);
+        if (showSpamInfo) {
+            mSpamInfoView.setText(res.getQuantityString(
+                    R.plurals.spam_count_text, spamCount, spamCount));
+        }
+
+        boolean showLookupStatus = false;
+        boolean showContactAttribution = false;
+        if (isLookupInProgress) {
+                mLookupStatusMessage.setText(
+                        res.getString(R.string.caller_info_loading, providerName));
+                showLookupStatus = true;
+                showContactAttribution = false;
+
+        } else {
+            switch (lookupStatus) {
+                case SUCCESS:
+                    mContactInfoAttributionText.setText(
+                            res.getString(R.string.powered_by_provider, providerName));
+                    mContactInfoAttributionLogo.setImageDrawable(providerLogo);
+                    showContactAttribution = true;
+                    showLookupStatus = false;
+                    break;
+                case FAIL:
+                    mLookupStatusMessage.setText(
+                            res.getString(R.string.caller_info_failure, providerName));
+                    showLookupStatus = true;
+                    showContactAttribution = false;
+                    break;
+                case NO_RESULT:
+                    mLookupStatusMessage.setText(
+                            res.getString(R.string.caller_info_no_result, providerName));
+                    showLookupStatus = true;
+                    showContactAttribution = false;
+                    break;
+                case CONFIG_ERROR:
+                    mLookupStatusMessage.setText(
+                            res.getString(R.string.caller_info_unauthenticated, providerName));
+                    showLookupStatus = true;
+                    showContactAttribution = false;
+                    break;
+                default:
+                    showLookupStatus = false;
+                    showContactAttribution = false;
+            }
+        }
+        mLookupStatusMessage.setVisibility(showLookupStatus ? View.VISIBLE : View.GONE);
+        mContactInfoAttributionText.setVisibility(showContactAttribution ? View.VISIBLE : View.GONE);
+        mContactInfoAttributionLogo.setVisibility(showContactAttribution ? View.VISIBLE : View.GONE);
+    }
+
     public void onDialpadVisibilityChange(boolean isShown) {
         mIsDialpadShowing = isShown;
         updateFabPosition();
+        // ensure that the extra-info container doesn't overlap w/ the dialpad
+        if (isShown) {
+            mLookupExtraInfoContainer.setElevation(0f);
+        } else {
+            mLookupExtraInfoContainer.setElevation(getContext().getResources()
+                    .getDimensionPixelSize(R.dimen.lookup_extra_info_container_elevation));
+        }
     }
 
-    private void updateFabPosition() {
+    public void updateFabPosition() {
+        updateFabPosition(0);
+    }
+
+    public void updateFabPosition(int yOffset) {
         int offsetY = 0;
         if (!mIsDialpadShowing) {
             offsetY = mFloatingActionButtonVerticalOffset;
             if (mSecondaryCallInfo.isShown()) {
                 offsetY -= mSecondaryCallInfo.getHeight();
+            } else if (yOffset != 0) {
+                // This needs to not happen if/when we move to
+                // android.support.design.widget.FloatingActionButton instead of rolling our
+                // own implementation
+                offsetY -= yOffset;
             }
         }
 
@@ -1382,6 +1496,7 @@ public class CallCardFragment extends BaseFragment<CallCardPresenter, CallCardPr
 
     private void setViewStatePostAnimation(OnLayoutChangeListener layoutChangeListener) {
         setViewStatePostAnimation(mCallButtonsContainer);
+        setViewStatePostAnimation(mModButtonsContainer);
         setViewStatePostAnimation(mCallStateLabel);
         setViewStatePostAnimation(mPrimaryName);
         setViewStatePostAnimation(mCallTypeLabel);
